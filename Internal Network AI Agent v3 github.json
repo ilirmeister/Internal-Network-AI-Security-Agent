@@ -1,0 +1,356 @@
+{
+  "name": "Internal Network AI Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-haiku-4-5-20251001",
+          "mode": "list",
+          "cachedResultName": "Claude Haiku 4.5"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        672,
+        -368
+      ],
+      "id": "e3495459-7af0-41e8-9efe-c62b7cecd320",
+      "name": "Anthropic Chat Model"
+    },
+    {
+      "parameters": {
+        "path": "nmap-scan",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -576,
+        -700
+      ],
+      "id": "e7cffef4-c2d4-4a91-852c-0bf8caf7c531",
+      "name": "Webhook",
+      "webhookId": "46b4fe9f-53a6-4704-bf3b-acccf319c50d"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        96,
+        -700
+      ],
+      "id": "556d5fa6-3dfd-488d-bb0e-ba49b2fc675d",
+      "name": "Loop Over IPs"
+    },
+    {
+      "parameters": {
+        "command": "=nmap -sn 192.168.1.0/24"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        -700
+      ],
+      "id": "6b8aeadc-ceb1-4b6e-88bd-3d64c2b67047",
+      "name": "Subnet Discovery 🌐"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst raw = input.stdout || \"\";\n\n// Extract all IPs from nmap -sn output\nconst ipRegex = /Nmap scan report for (?:.+ \\()?(\\d+\\.\\d+\\.\\d+\\.\\d+)\\)?/g;\nconst items = [];\nlet match;\n\nwhile ((match = ipRegex.exec(raw)) !== null) {\n  items.push({\n    json: {\n      ip: match[1],\n      timestamp: new Date().toISOString()\n    }\n  });\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        -700
+      ],
+      "id": "140d3b8b-7037-4735-877c-1ea0b218c58f",
+      "name": "Extract Live IPs 🔍"
+    },
+    {
+      "parameters": {
+        "command": "=nmap -sV --open {{ $json.ip }}"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        320,
+        -700
+      ],
+      "id": "60d36233-c191-4609-a4d5-78c283f16e3d",
+      "name": "Deep Scan 🔬",
+      "credentials": {
+        "sshPassword": {
+          "id": "lp6Bm1Nx5OVaQnvf",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a network security analyst. You MUST use your available tools to enrich the scan data. Do NOT rely on your own knowledge alone.\n\nTarget: {{ $json.target }}\nTimestamp: {{ $json.timestamp }}\nScan Output:\n{{ $json.scan_output }}\n\nYou MUST perform ALL of the following steps:\n1. Use VirusTotal to check the target IP reputation\n2. Use AbuseIPDB to check if the IP has been reported for abuse\n3. Use SerpAPI to search for CVEs for the TOP 3 most critical services only (ignore tcpwrapped, upnp, and http-alt ports)\n\nAfter gathering tool results, produce a structured security report with:\n- Target summary\n- Open ports and services\n- CVEs found per service\n- IP reputation results\n- Risk level (Critical/High/Medium/Low)\n- Recommended actions\n\nIMPORTANT RULES:\n- Maximum 3 SerpAPI searches total\n- Skip tcpwrapped, upnp, http-alt, and unknown services\n- Focus on: SSH, Telnet, SMB, DNS, HTTP only\n- If any tool fails, skip it and continue",
+        "options": {
+          "maxIterations": 30
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        768,
+        -628
+      ],
+      "id": "cbb34427-fe7c-46ed-925e-d4adbb8be09d",
+      "name": " Security Analyzer 🤖"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst raw = input.stdout || \"\";\n\nreturn [{\n  json: {\n    target: $('Loop Over IPs').first().json.ip,\n    scan_output: raw || \"No scan output received\",\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -700
+      ],
+      "id": "b14d731b-4ab6-46e4-b837-7ea39a40ced2",
+      "name": " Parse Scan Output 📋"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.first().json.data || [];\n\nlet reportRows = '';\nfor (const item of items) {\n  let output = item.output || item.text || JSON.stringify(item);\n  \n  // Color code risk levels\n  output = output.replace(/CRITICAL/g, '<span class=\"critical\">■ CRITICAL</span>');\n  output = output.replace(/HIGH/g, '<span class=\"high\">■ HIGH</span>');\n  output = output.replace(/MEDIUM/g, '<span class=\"medium\">■ MEDIUM</span>');\n  output = output.replace(/LOW/g, '<span class=\"low\">■ LOW</span>');\n  \n  // Bold headers (lines starting with ##)\n  output = output.replace(/^(#{1,3} .+)$/gm, '<span class=\"section-header\">$1</span>');\n  \n  // Highlight IPs\n  output = output.replace(/(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})/g, '<span class=\"ip\">$1</span>');\n  \n  // Highlight port numbers\n  output = output.replace(/(\\d{2,5}\\/tcp)/g, '<span class=\"port\">$1</span>');\n\n  reportRows += `<div class=\"device-card\">${output.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')}</div>`;\n}\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n<style>\n  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');\n  * { box-sizing: border-box; }\n  body { \n    font-family: 'Share Tech Mono', monospace; \n    background: #000000; \n    color: #00ff41; \n    padding: 24px; \n    margin: 0;\n    line-height: 1.8;\n  }\n  .header { \n    border: 1px solid #00ff41; \n    padding: 24px; \n    margin-bottom: 28px;\n    text-align: center;\n    box-shadow: 0 0 30px rgba(0,255,65,0.3);\n  }\n  h1 { \n    color: #00ff41; \n    font-size: 26px; \n    letter-spacing: 8px;\n    text-shadow: 0 0 10px #00ff41;\n    margin: 0 0 10px 0;\n  }\n  .subtitle { color: #008f11; font-size: 12px; letter-spacing: 3px; }\n  .meta { \n    background: #0a0a0a;\n    border: 1px solid #008f11;\n    padding: 12px 16px;\n    margin-bottom: 24px; \n    color: #008f11; \n    font-size: 12px;\n    letter-spacing: 1px;\n    line-height: 2;\n  }\n  .device-card { \n    background: #050505; \n    border: 1px solid #00ff41;\n    border-left: 5px solid #00ff41;\n    padding: 20px 24px; \n    margin: 20px 0;\n    box-shadow: 0 0 15px rgba(0,255,65,0.15);\n    white-space: pre-wrap;\n    word-wrap: break-word;\n    font-size: 13px;\n    line-height: 1.9;\n  }\n  .section-header {\n    color: #00ff41;\n    font-size: 14px;\n    display: block;\n    margin-top: 16px;\n    margin-bottom: 4px;\n    text-shadow: 0 0 6px #00ff41;\n    border-bottom: 1px solid #003b12;\n    padding-bottom: 4px;\n  }\n  strong { color: #7fff7f; }\n  .critical { color: #ff3333; text-shadow: 0 0 8px #ff0000; font-weight: bold; }\n  .high { color: #ff8800; text-shadow: 0 0 8px #ff6600; font-weight: bold; }\n  .medium { color: #ffff00; text-shadow: 0 0 8px #cccc00; font-weight: bold; }\n  .low { color: #00ff41; font-weight: bold; }\n  .ip { color: #00ccff; text-shadow: 0 0 6px #00aaff; }\n  .port { color: #ff69b4; text-shadow: 0 0 4px #ff1493; }\n  .footer { \n    color: #008f11; \n    font-size: 11px; \n    margin-top: 32px; \n    text-align: center;\n    border-top: 1px solid #008f11;\n    padding-top: 14px;\n    letter-spacing: 2px;\n  }\n  .blink { animation: blink 1s step-end infinite; }\n  @keyframes blink { 50% { opacity: 0; } }\n</style>\n</head>\n<body>\n  <div class=\"header\">\n    <h1>[ NETWORK SECURITY SCAN ]</h1>\n    <div class=\"subtitle\">>> THREAT ANALYSIS COMPLETE // ALL SYSTEMS MONITORED</div>\n  </div>\n  <div class=\"meta\">\n    > SCAN TIMESTAMP.....: ${new Date().toUTCString()}<br>\n    > TARGETS ANALYZED...: ${items.length} DEVICES<br>\n    > NETWORK RANGE......: 192.168.1.0/24<br>\n    > STATUS..............: <span class=\"blink\">■ COMPLETE</span>\n  </div>\n  ${reportRows}\n  <div class=\"footer\">\n    >> POWERED BY N8N + CLAUDE AI + RASPBERRY PI 3 // FOLLOW THE WHITE RABBIT 🐰\n  </div>\n</body>\n</html>`;\n\nreturn [{ json: { html } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -944
+      ],
+      "id": "c0183205-d799-44d7-ad00-ad321f2433ab",
+      "name": "Build HTML Report! 📊"
+    },
+    {
+      "parameters": {
+        "fromEmail": "youremail@gmail.com",
+        "toEmail": "youremail@gmail.com",
+        "subject": "=Network Security Scan Report - {{ $now.toFormat('yyyy-MM-dd') }}",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        832,
+        -944
+      ],
+      "id": "7a8745d3-627a-45d1-b91c-f90aad6524b1",
+      "name": "Send an Email",
+      "webhookId": "db36dbf3-78be-4af8-9abe-08d30006eecc",
+      "credentials": {
+        "smtp": {
+          "id": "rRXJaXmpY8qcOfut",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        320,
+        -944
+      ],
+      "id": "1896862c-3fef-4bce-a401-fd0f91e76fc2",
+      "name": "Collect All Reports 📋"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolSerpApi",
+      "typeVersion": 1,
+      "position": [
+        928,
+        -352
+      ],
+      "id": "2df5ae52-138d-4eec-b170-59743ade053e",
+      "name": "CVE Look up"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1120,
+        -628
+      ],
+      "id": "2c94f1b5-842c-41ed-a191-8e298d3fb1f2",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": " Security Analyzer 🤖",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Subnet Discovery 🌐",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over IPs": {
+      "main": [
+        [
+          {
+            "node": "Collect All Reports 📋",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deep Scan 🔬",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subnet Discovery 🌐": {
+      "main": [
+        [
+          {
+            "node": "Extract Live IPs 🔍",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Live IPs 🔍": {
+      "main": [
+        [
+          {
+            "node": "Loop Over IPs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deep Scan 🔬": {
+      "main": [
+        [
+          {
+            "node": " Parse Scan Output 📋",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    " Security Analyzer 🤖": {
+      "main": [
+        [
+          {
+            "node": "Loop Over IPs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    " Parse Scan Output 📋": {
+      "main": [
+        [
+          {
+            "node": " Security Analyzer 🤖",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML Report! 📊": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Reports 📋": {
+      "main": [
+        [
+          {
+            "node": "Build HTML Report! 📊",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CVE Look up": {
+      "ai_tool": [
+        [
+          {
+            "node": " Security Analyzer 🤖",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "9dfc20c8-dab8-4d1a-9a09-aa8ef417e892",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ada00d03a33f1bc52c733cd8a6417401f551f45b2ccdaf007fe1f08e62bab046"
+  },
+  "id": "EqJAczm81pmOtSf4",
+  "tags": []
+}
